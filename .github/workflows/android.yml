@@ -25,20 +25,22 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: android-app/package-lock.json
 
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      - name: 안드로이드 SDK 확인 (빌드 서버에 이미 설치됨)
+        run: |
+          echo "::notice::단계 통과 - 준비 완료 (ANDROID_HOME=$ANDROID_HOME)"
+          ls "$ANDROID_HOME/platforms" | tail -3 | tr '\n' ' ' | sed 's/^/::notice::설치된 플랫폼: /'; echo
 
       - name: 앱 화면 준비 (PC용 HTML → 앱)
         run: |
           set -o pipefail
           { npm ci && python3 prepare-www.py && npx cap sync android; } 2>&1 | tee -a ../build.log
+          echo "::notice::단계 통과 - 앱 화면 준비"
 
       - name: 서명 키 꺼내기 (GitHub Secrets)
         env:
@@ -68,6 +70,7 @@ jobs:
             cp app/build/outputs/apk/debug/app-debug.apk "../overtime-v1.0.${VERSION_CODE}-test.apk"
           fi
           rm -f app/release.keystore
+          echo "::notice::단계 통과 - APK 만들기"
 
       - name: Releases 에 올리기
         env:
