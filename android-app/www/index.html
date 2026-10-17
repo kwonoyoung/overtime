@@ -200,6 +200,21 @@
   .seg input { position: absolute; opacity: 0; pointer-events: none; }
   .seg label.on { background: var(--ink); color: #fff; }
   #soundOpts.off { opacity: .4; pointer-events: none; }
+  /* 기록 탭: 근무 시작·종료 목록 */
+  .sess-list { margin-top: 12px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .sess-line { display: grid; grid-template-columns: 42px 1fr auto; gap: 8px; align-items: center; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .sess-line:first-child { border-top: 0; }
+  .sess-line .no { font-size: 12px; color: var(--muted); }
+  .sess-line .tm small { color: var(--muted); font-size: 11px; }
+  .sess-line b { font-weight: 600; }
+  .sess-line.live { background: var(--accent-soft); }
+  .sess-line.live b { color: var(--accent); }
+  .sess-line.live .no::before { content: "● "; color: var(--accent); animation: blink 1.6s infinite; }
+  .sess-line.sum { background: var(--surface); }
+  .sess-line.sum b { font-weight: 800; }
+  .cum-line { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .cum-line b { color: var(--ink); }
+  .cum-line span:last-child { white-space: nowrap; margin-left: 10px; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -302,7 +317,7 @@
       </div>
       <div class="stats">
         <div><span>상신 합계</span><strong id="mReq"></strong></div>
-        <div><span>실제 합계</span><strong id="mAct"></strong></div>
+        <div><span>실제 초과 누적</span><strong id="mAct"></strong></div>
         <div class="hi"><span>인정 합계</span><strong id="mRec"></strong></div>
       </div>
       <progress id="mProgress" max="100" value="0"></progress>
@@ -990,14 +1005,25 @@ function renderRecords() {
   let sReq = 0, sAct = 0, sRec = 0;
   const list = $("recordList");
   list.innerHTML = "";
+  // 이달 실제 초과근무 누적 (날짜 순서대로 더해 감)
+  const cumAct = {}; let run = 0;
+  for (const k of keys) { run += calc(k).actual; cumAct[k] = run; }
+  const now = Date.now();
   for (const key of keys.slice().reverse()) {
-    const d = state.days[key], c = calc(key);
+    const d = state.days[key], c = calc(key, now);
+    // 근무 한 번마다 한 줄: 시작 → 종료 · 걸린 시간
+    const nextDay = (t) => (dateKey(t) !== key ? " <small>(다음날)</small>" : "");
+    const lines = [];
+    if (d.early) lines.push(`<div class="sess-line"><span class="no">조기</span><span class="tm">${d.early} → ${d.earlyEnd || state.settings.regularStart}</span><b>${fmt(c.early)}</b></div>`);
+    sess(d).forEach((x, i) => {
+      const mins = Math.max(0, Math.floor(((x.end ?? now) - x.start) / 60000));
+      lines.push(`<div class="sess-line${x.end ? "" : " live"}"><span class="no">${i + 1}회</span><span class="tm">${hm(x.start)} → ${x.end ? hm(x.end) + nextDay(x.end) : "진행 중"}</span><b>${fmt(mins)}</b></div>`);
+    });
+    if (lines.length > 1) lines.push(`<div class="sess-line sum"><span class="no">합계</span><span class="tm">실제 초과근무</span><b>${fmt(c.actual)}</b></div>`);
     sReq += c.req || 0; sAct += c.actual; sRec += c.recognized;
     const div = document.createElement("div");
     div.className = "rec";
     const detail = [
-      d.early ? `조기출근 ${d.early}~${d.earlyEnd || state.settings.regularStart}(${fmt(c.early)})` : "",
-      sess(d).length ? `초과근무 ${sess(d).map(fmtSess).join(", ")}(${sess(d).length > 1 ? `${sess(d).length}회 · ` : ""}${fmt(c.ot)})` : "",
       c.outside > 0 ? `상신시간 밖 ${fmt(c.outside)} 제외` : "",
       c.deduct ? `공제 ${fmt(c.deduct)}` : "",
     ].filter(Boolean).join(" · ");
@@ -1016,7 +1042,8 @@ function renderRecords() {
         <div><span>실제 초과근무</span>${fmt(c.actual)}</div>
         <div><span>인정</span><b class="hi">${fmt(c.recognized)}</b></div>
       </div>
-      <div class="rec-detail">${detail || "근무 시각 없음"}</div>`;
+      ${lines.length ? `<div class="sess-list">${lines.join("")}</div>` : `<div class="rec-detail">근무 시각 없음</div>`}
+      <div class="cum-line"><span>${detail || "&nbsp;"}</span><span>이달 실제 누적 <b>${fmt(cumAct[key])}</b></span></div>`;
     list.appendChild(div);
   }
   if (!keys.length) list.innerHTML = `<p class="empty">이 달의 기록이 없습니다.</p>`;
@@ -1473,7 +1500,12 @@ window.addEventListener("storage", (e) => {
 
 // ═════════════ 11. 시작 ═════════════
 renderTodayForm();
-setInterval(() => { renderTodayLive(); checkAlarm(); }, 1000); // 1초마다 화면·알림 확인
+let tick = 0;
+setInterval(() => {
+  renderTodayLive(); checkAlarm(); // 1초마다 화면·알림 확인
+  // 기록 탭을 보고 있고 근무 중이면 30초마다 진행 중 시간·누적을 새로 고침
+  if (++tick % 30 === 0 && !$("tab-records").hidden && runningKey() && !$("editDlg").open) renderRecords();
+}, 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { renderTodayLive(); checkAlarm(); } });
 </script>
 <script src="native.js"></script>
