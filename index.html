@@ -200,6 +200,18 @@
   .ed-sess-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; margin-bottom: 6px; }
   .sess-row { flex-wrap: nowrap; gap: 4px; margin-bottom: 6px; }
   .sess-row input { flex: 1; min-width: 0; }
+  /* 알림음 목록 (벨소리 고르기) */
+  .tone-list { margin-top: 10px; background: #fff; border-radius: var(--radius); border: 1px solid var(--line); overflow: hidden; }
+  .tone { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+  .tone:first-child { border-top: 0; }
+  .tone:hover { background: #fafafa; }
+  .tone input[type=radio] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; flex: none; }
+  .tone .nm { flex: 1; min-width: 0; }
+  .tone .nm b { display: block; font-size: 15px; font-weight: 600; }
+  .tone .nm small { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tone.on { background: var(--accent-soft); }
+  .tone .play { width: 36px; height: 36px; padding: 0; flex: none; font-size: 13px; }
+  .tone .play.playing { background: var(--ink); color: #fff; border-color: var(--ink); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -341,16 +353,11 @@
         <span class="row">1분마다 <select id="setRepeat"></select> 분 동안 다시 알림</span>
       </div>
       <div class="field"><span>알림 소리</span><input type="checkbox" id="setSound"></div>
-      <div class="field">
-        <span>소리 종류</span>
-        <span class="row">
-          <select id="setSoundType">
-            <option value="bell">따르릉 알람 벨</option>
-            <option value="chime">딩동 차임</option>
-            <option value="beep">삐삐 전자음</option>
-          </select>
-          <button type="button" id="previewSound" class="small">▶ 듣기</button>
-        </span>
+      <div class="field" style="display:block">
+        <span>알림음 선택 <small style="color:var(--muted);font-weight:400">· ▶를 누르면 미리 들을 수 있어요</small></span>
+        <input type="hidden" id="setSoundType">
+        <div class="tone-list" id="toneList" role="radiogroup" aria-label="알림음"></div>
+        <input type="file" id="customSoundFile" accept="audio/*" hidden>
       </div>
       <div class="field">
         <span>소리 크기</span>
@@ -889,32 +896,63 @@ function strike(out, t, f, gain, decay) {
     o.connect(v); v.connect(out); o.start(t); o.stop(t + decay + 0.05);
   });
 }
+// 짧은 음 하나 (파형 종류·길이 지정)
+function note(out, t, f, dur, gain, wave = "sine", attack = 0.005) {
+  const o = audioCtx.createOscillator(), v = audioCtx.createGain();
+  o.type = wave; o.frequency.value = f;
+  v.gain.setValueAtTime(0.0001, t);
+  v.gain.exponentialRampToValueAtTime(gain, t + attack);
+  v.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(v); v.connect(out); o.start(t); o.stop(t + dur + 0.05);
+}
+// 마림바 한 음 (나무 건반: 기본음 + 4배음이 빨리 사라짐)
+const marimba = (out, t, f, g = 0.5) => { note(out, t, f, 0.6, g); note(out, t, f * 4, 0.12, g * 0.25); };
+
+// ── 알림음 목록 ── (이름, 설명, 소리 만드는 방법)
+const TONES = {
+  bell:    { name: "따르릉 알람 벨", desc: "자명종처럼 따르르릉 두 번", play(out, t0) {
+    for (const st of [0, 1.4]) for (let i = 0; i < 18; i++) strike(out, t0 + st + i / 18, i % 2 ? 1318 : 1244, 0.35, 0.22); } },
+  school:  { name: "학교 종소리", desc: "딩-동-댕-동 (웨스트민스터 차임)", play(out, t0) {
+    [659, 523, 587, 392, 0, 392, 587, 659, 523].forEach((f, i) => f && strike(out, t0 + i * 0.5, f, 0.55, 1.6)); } },
+  chime:   { name: "딩동 차임", desc: "부드러운 딩-동 두 번", play(out, t0) {
+    [[0, 1319], [0.45, 1047], [1.4, 1319], [1.85, 1047]].forEach(([dt, f]) => strike(out, t0 + dt, f, 0.6, 1.4)); } },
+  marimba: { name: "마림바", desc: "통통 튀는 휴대폰 벨소리 느낌", play(out, t0) {
+    const m = [784, 988, 1175, 988, 784, 1175, 1568, 0, 784, 988, 1175, 988, 1568];
+    m.forEach((f, i) => f && marimba(out, t0 + i * 0.16, f)); } },
+  harp:    { name: "하프", desc: "위로 흐르는 맑은 아르페지오", play(out, t0) {
+    [523, 659, 784, 1047, 1319, 1568, 2093].forEach((f, i) => note(out, t0 + i * 0.09, f, 1.6, 0.3, "triangle"));
+    [523, 659, 784, 1047, 1319, 1568, 2093].forEach((f, i) => note(out, t0 + 1.3 + i * 0.09, f, 1.6, 0.3, "triangle")); } },
+  digital: { name: "디지털 알람", desc: "삐삐삐삐 — 삐삐삐삐 (손목시계 알람)", play(out, t0) {
+    for (let g = 0; g < 3; g++) for (let i = 0; i < 4; i++) note(out, t0 + g * 0.8 + i * 0.1, 2093, 0.06, 0.25, "square", 0.002); } },
+  beep:    { name: "삐삐 전자음", desc: "짧은 삐- 세 번", play(out, t0) {
+    for (let i = 0; i < 3; i++) note(out, t0 + i * 0.35, 880, 0.22, 0.3, "square", 0.002); } },
+  siren:   { name: "긴급 사이렌", desc: "오르내리는 경고음 (확실히 알아채고 싶을 때)", play(out, t0) {
+    const o = audioCtx.createOscillator(), v = audioCtx.createGain(); o.type = "sawtooth";
+    for (let k = 0; k < 4; k++) { o.frequency.setValueAtTime(700, t0 + k * 0.6); o.frequency.linearRampToValueAtTime(1300, t0 + k * 0.6 + 0.3); o.frequency.linearRampToValueAtTime(700, t0 + k * 0.6 + 0.6); }
+    v.gain.setValueAtTime(0.0001, t0); v.gain.exponentialRampToValueAtTime(0.28, t0 + 0.05); v.gain.setValueAtTime(0.28, t0 + 2.3); v.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.4);
+    o.connect(v); v.connect(out); o.start(t0); o.stop(t0 + 2.5); } },
+};
+
+// ── 내 소리 파일 (mp3·wav 등) ── 이 기기 브라우저에 함께 저장
+const CUSTOM_KEY = "overtime_custom_sound";
+function customSound() { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY)); } catch (e) { return null; } }
+let customAudio = null;
+
 function playSound(type = state.settings.soundType, volume = state.settings.volume) {
   try {
+    if (type === "custom") {
+      const c = customSound();
+      if (!c) return playSound("bell", volume); // 파일이 없으면 기본 벨
+      customAudio?.pause();
+      customAudio = new Audio(c.data); customAudio.volume = Math.min(1, volume);
+      customAudio.play().catch(() => {});
+      return;
+    }
     unlockSound();
     const t0 = audioCtx.currentTime + 0.05;
     const out = audioCtx.createGain(), comp = audioCtx.createDynamicsCompressor();
     out.gain.value = volume; out.connect(comp); comp.connect(audioCtx.destination);
-    if (type === "bell") {
-      // 따르르릉 — 따르르릉 : 망치가 종 두 개를 1초에 약 18번 번갈아 치는 자명종 소리
-      for (const start of [0, 1.4]) {
-        for (let i = 0; i < 18; i++) {
-          const t = t0 + start + i / 18;
-          strike(out, t, i % 2 ? 1318 : 1244, 0.35, 0.22);
-        }
-      }
-    } else if (type === "chime") {
-      // 딩-동 두 번
-      [[0, 1319], [0.45, 1047], [1.4, 1319], [1.85, 1047]].forEach(([dt, f]) => strike(out, t0 + dt, f, 0.6, 1.4));
-    } else {
-      // 삐-삐-삐
-      for (let i = 0; i < 3; i++) {
-        const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = t0 + i * 0.35;
-        o.type = "square"; o.frequency.value = 880; o.connect(g); g.connect(out);
-        g.gain.setValueAtTime(0.3, t); g.gain.setValueAtTime(0.0001, t + 0.22);
-        o.start(t); o.stop(t + 0.24);
-      }
-    }
+    (TONES[type] || TONES.bell).play(out, t0);
   } catch (e) {}
 }
 const beep = () => playSound(); // 예전 이름으로 불러도 동작
@@ -1242,6 +1280,7 @@ function renderSettings() {
   $("setRepeat").value = s.alarmRepeat;
   $("setSound").checked = s.sound;
   $("setSoundType").value = s.soundType;
+  renderToneList();
   $("setVolume").value = s.volume; $("volLabel").textContent = Math.round(s.volume * 100) + "%";
   $("setRegular").value = s.regularStart;
   $("setDeduct").value = s.weekdayDeduct / 60; // 저장은 분, 화면은 시간
@@ -1285,7 +1324,44 @@ function saveSettings() {
 }
 $("settingsSave").onclick = () => saveSettings();
 // 소리 미리 듣기 (저장 전 고른 소리·크기로)
-$("previewSound").onclick = () => playSound($("setSoundType").value, Number($("setVolume").value));
+// 알림음 목록 그리기 (벨소리 고르기 화면)
+function renderToneList() {
+  const cur = $("setSoundType").value || "bell", c = customSound();
+  const items = Object.entries(TONES).map(([id, t]) => [id, t.name, t.desc]);
+  items.push(["custom", "내 소리 파일", c ? c.name : "mp3·wav 등 원하는 소리 파일을 골라 넣기 (2MB 이하)"]);
+  $("toneList").innerHTML = items.map(([id, nm, desc]) => `
+    <label class="tone${id === cur ? " on" : ""}">
+      <input type="radio" name="tone" value="${id}"${id === cur ? " checked" : ""}>
+      <span class="nm"><b>${nm}</b><small>${xmlEsc(desc)}</small></span>
+      ${id === "custom" ? `<button type="button" class="small" data-pick>${c ? "바꾸기" : "파일 선택"}</button>` : ""}
+      <button type="button" class="play" data-play="${id}" aria-label="${nm} 미리 듣기">▶</button>
+    </label>`).join("");
+  $("toneList").querySelectorAll("input[name=tone]").forEach((r) => (r.onchange = () => {
+    if (r.value === "custom" && !customSound()) { $("customSoundFile").click(); renderToneList(); return; }
+    $("setSoundType").value = r.value; setDirty(true); renderToneList();
+    playSound(r.value, Number($("setVolume").value)); // 고르면 바로 한 번 들려줌
+  }));
+  $("toneList").querySelectorAll("[data-play]").forEach((b) => (b.onclick = (e) => {
+    e.preventDefault();
+    if (b.dataset.play === "custom" && !customSound()) return $("customSoundFile").click();
+    playSound(b.dataset.play, Number($("setVolume").value));
+    b.classList.add("playing"); setTimeout(() => b.classList.remove("playing"), 1500);
+  }));
+  const pick = $("toneList").querySelector("[data-pick]");
+  if (pick) pick.onclick = (e) => { e.preventDefault(); $("customSoundFile").click(); };
+}
+// 내 소리 파일 넣기
+$("customSoundFile").onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  if (f.size > 2 * 1024 * 1024) return notice("2MB 이하의 소리 파일을 골라 주세요.\n(긴 음악은 앞부분만 잘라 쓰시면 좋아요)");
+  const data = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify({ name: f.name, data })); }
+  catch (err) { return notice("저장 공간이 부족해 소리 파일을 넣지 못했습니다. 더 작은 파일을 골라 주세요."); }
+  $("setSoundType").value = "custom"; setDirty(true); renderToneList();
+  playSound("custom", Number($("setVolume").value));
+  notice(`"${f.name}"을(를) 알림음으로 골랐습니다.\n[설정 저장]을 누르면 적용됩니다.`);
+};
 $("setVolume").addEventListener("input", () => ($("volLabel").textContent = Math.round($("setVolume").value * 100) + "%"));
 $("settingsReset").onclick = () => { setDirty(false); renderSettings(); };
 window.addEventListener("beforeunload", (e) => { if (settingsDirty) { e.preventDefault(); e.returnValue = ""; } });
