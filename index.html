@@ -315,6 +315,7 @@
         <h2 style="margin:0">월별 초과근무 기록</h2>
         <div class="row">
           <button id="addRecord" class="small">+ 기록 추가</button>
+          <button id="exportXlsx" class="small primary">엑셀 받기</button>
           <button id="exportCsv" class="small">CSV</button>
         </div>
       </div>
@@ -1009,6 +1010,155 @@ $("editForm").onsubmit = async (e) => {
   viewMonth = key.slice(0, 7); renderRecords(); renderTodayForm();
 };
 
+// ═════════════ 엑셀(XLSX) 내려받기 ═════════════
+// 외부 라이브러리 없이 이 파일 안에서 엑셀 파일을 직접 만듭니다 (인터넷이 없어도 동작).
+// 엑셀 파일(.xlsx)은 사실 XML 문서 몇 개를 ZIP으로 묶은 것입니다.
+
+// ── ZIP 묶기 (압축 없이 저장 방식) ──
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(bytes) { let c = 0xffffffff; for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function makeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  const u16 = (v) => [v & 255, (v >>> 8) & 255], u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  for (const [name, text] of files) {
+    const nameB = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const head = [...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0)];
+    parts.push(new Uint8Array(head), nameB, data);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)]), nameB);
+    offset += head.length + nameB.length + data.length;
+  }
+  const cSize = central.reduce((n, p) => n + p.length, 0);
+  const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cSize), ...u32(offset), ...u16(0)]);
+  return new Blob([...parts, ...central, end], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+// ── 엑셀 시트 만들기 ──
+const xmlEsc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const colName = (i) => String.fromCharCode(65 + i); // A, B, C … (12열까지라 한 글자로 충분)
+const excelDate = (key) => { const [y, m, d] = key.split("-").map(Number); return (Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000; };
+// 셀 서식 번호 (아래 styles.xml 의 cellXfs 순서)
+const X = { title: 1, header: 2, text: 3, dur: 4, totalLabel: 5, totalDur: 6, note: 7, rec: 8, date: 9, off: 10, totalRec: 11 };
+
+function buildXlsx(ym) {
+  const [y, m] = ym.split("-");
+  const s = state.settings, keys = monthKeys(ym);
+  const rows = []; // 각 줄: [[값, 서식, 종류], …]  종류: s=글자, n=숫자, f=수식
+  const str = (v, st = X.text) => [v, st, "s"], num = (v, st) => [v, st, "n"], fx = (f, v, st) => [f, st, "f", v];
+  const minToDay = (min) => (min || 0) / 1440; // 엑셀 시간은 하루 = 1
+
+  rows.push([str(`${y}년 ${Number(m)}월 초과근무 기록`, X.title)]);
+  rows.push([str(`오춘기 권오영 · 출력일 ${dateKey(Date.now())} · 평일 공제 ${fmt(s.weekdayDeduct)} · 개인 참고용 (실제 인정시간·수당은 소속 기관 인사시스템 기준)`, X.note)]);
+  rows.push([]);
+  const head = ["날짜", "요일", "구분", "조기출근 상신", "조기출근 근무", "초과근무 상신", "초과근무 근무", "상신 합계", "실제 근무", "상신 밖", "공제", "인정"];
+  rows.push(head.map((h) => str(h, X.header)));
+  const first = rows.length + 1;
+  for (const key of keys) {
+    const d = state.days[key], c = calc(key), off = c.type !== "평일";
+    rows.push([
+      num(excelDate(key), X.date),
+      str(WEEK[new Date(at(key, "00:00")).getDay()], off ? X.off : X.text),
+      str(holidayName(key) || c.type, off ? X.off : X.text),
+      str(d.earlyReqStart ? `${d.earlyReqStart}~${d.earlyReqEnd}` : ""),
+      str(d.early ? `${d.early}~${d.earlyEnd || s.regularStart}` : ""),
+      str(d.reqStart ? `${d.reqStart}~${d.reqEnd}` : ""),
+      str(sess(d).map(fmtSess).join(" / ")),
+      num(minToDay(c.req), X.dur), num(minToDay(c.actual), X.dur), num(minToDay(c.outside), X.dur),
+      num(minToDay(c.deduct), X.dur), num(minToDay(c.recognized), X.rec),
+    ]);
+  }
+  const last = rows.length;
+  // 합계 줄 (엑셀 수식 SUM, 미리 계산한 값도 함께 넣어 폰 미리보기에서도 보이게)
+  const tot = (col, i, st) => { let v = 0; for (let r = first - 1; r < last; r++) v += rows[r][i][0]; return fx(`SUM(${col}${first}:${col}${Math.max(first, last)})`, v, st); };
+  const totRow = [str("합계", X.totalLabel), ...Array(6).fill(0).map(() => str("", X.totalLabel))];
+  ["H", "I", "J", "K"].forEach((col, j) => totRow.push(keys.length ? tot(col, 7 + j, X.totalDur) : num(0, X.totalDur)));
+  totRow.push(keys.length ? tot("L", 11, X.totalRec) : num(0, X.totalRec));
+  rows.push(totRow);
+  // 아래 요약
+  const recSum = keys.reduce((n, k) => n + calc(k).recognized, 0);
+  let yRec = 0; for (const k of Object.keys(state.days).filter((k) => k.startsWith(y))) yRec += calc(k).recognized;
+  rows.push([]);
+  rows.push([str(`월 기준 ${s.monthlyLimit}시간 중 ${Math.round((recSum / (s.monthlyLimit * 60)) * 100)}% 인정 · 남은 시간 ${fmt(Math.max(0, s.monthlyLimit * 60 - recSum))}`, X.note)]);
+  rows.push([str(`${y}년 누적 인정 ${fmt(yRec)}`, X.note)]);
+
+  // 시트 XML
+  const sheetRows = rows.map((r, ri) => `<row r="${ri + 1}"${ri === 0 ? ' ht="26" customHeight="1"' : ri === 3 ? ' ht="22" customHeight="1"' : ""}>` + r.map(([v, st, t, cached], ci) => {
+    const ref = colName(ci) + (ri + 1);
+    if (t === "n") return `<c r="${ref}" s="${st}"><v>${v}</v></c>`;
+    if (t === "f") return `<c r="${ref}" s="${st}"><f>${v}</f><v>${cached}</v></c>`;
+    return v === "" ? `<c r="${ref}" s="${st}"/>` : `<c r="${ref}" s="${st}" t="inlineStr"><is><t>${xmlEsc(v)}</t></is></c>`;
+  }).join("") + `</row>`).join("");
+  const widths = [12, 6, 12, 14, 14, 14, 26, 10, 10, 10, 9, 10];
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>
+<sheetViews><sheetView workbookViewId="0" showGridLines="0"><pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<sheetFormatPr defaultRowHeight="18"/>
+<cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols>
+<sheetData>${sheetRows}</sheetData>
+<mergeCells count="2"><mergeCell ref="A1:L1"/><mergeCell ref="A2:L2"/></mergeCells>
+<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>
+<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+</worksheet>`;
+
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="2"><numFmt numFmtId="164" formatCode="[h]:mm"/><numFmt numFmtId="165" formatCode="yyyy-mm-dd"/></numFmts>
+<fonts count="6">
+<font><sz val="10"/><name val="맑은 고딕"/><family val="3"/></font>
+<font><b/><sz val="14"/><color rgb="FF111111"/><name val="맑은 고딕"/><family val="3"/></font>
+<font><b/><sz val="10"/><color rgb="FF111111"/><name val="맑은 고딕"/><family val="3"/></font>
+<font><sz val="9"/><color rgb="FF6B7077"/><name val="맑은 고딕"/><family val="3"/></font>
+<font><b/><sz val="10"/><color rgb="FFE8622A"/><name val="맑은 고딕"/><family val="3"/></font>
+<font><sz val="10"/><color rgb="FFE8622A"/><name val="맑은 고딕"/><family val="3"/></font>
+</fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFF2F3F5"/><bgColor indexed="64"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFDEEE6"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="3"><border><left/><right/><top/><bottom/><diagonal/></border>
+<border><left style="thin"><color rgb="FFE1E3E6"/></left><right style="thin"><color rgb="FFE1E3E6"/></right><top style="thin"><color rgb="FFE1E3E6"/></top><bottom style="thin"><color rgb="FFE1E3E6"/></bottom><diagonal/></border>
+<border><left style="thin"><color rgb="FFE1E3E6"/></left><right style="thin"><color rgb="FFE1E3E6"/></right><top style="medium"><color rgb="FF111111"/></top><bottom style="thin"><color rgb="FFE1E3E6"/></bottom><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="12">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="2" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="164" fontId="2" fillId="2" borderId="2" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="164" fontId="4" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="5" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="164" fontId="4" fillId="3" borderId="2" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+  const sheetName = `${y}년 ${Number(m)}월`;
+  return makeZip([
+    ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`],
+    ["_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(sheetName)}" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`],
+    ["xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ["xl/worksheets/sheet1.xml", sheet],
+    ["xl/styles.xml", styles],
+  ]);
+}
+$("exportXlsx").onclick = () => {
+  if (!monthKeys(viewMonth).length) return notice("이 달의 기록이 없습니다.");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(buildXlsx(viewMonth));
+  a.download = `초과근무_${viewMonth}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove(); // 화면에 붙였다가 눌러야 파일 이름이 제대로 붙습니다
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+
 // CSV 내려받기 (보고 있는 달)
 $("exportCsv").onclick = () => {
   const rows = [["날짜", "요일", "구분", "조기출근상신시작", "조기출근상신종료", "조기출근시작", "조기출근종료", "조기출근실제(분)",
@@ -1026,7 +1176,7 @@ $("exportCsv").onclick = () => {
 function download(name, text, type) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type }));
-  a.download = name; a.click();
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
 
 // ═════════════ 9. 설정 탭 ═════════════
