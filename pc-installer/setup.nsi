@@ -80,6 +80,65 @@ Var AppArgs   ; 브라우저에 넘길 인수
   ${EndIf}
 !macroend
 
+;  경로 → URL (UTF-8 퍼센트 인코딩, 역슬래시는 /)
+Function UrlEncodePath
+  Exch $0          ; 입력 경로
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  ; UTF-8 바이트 길이 구하고 버퍼에 변환
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w r0, i -1, i 0, i 0, i 0, i 0) i .r1'
+  System::Alloc $1
+  Pop $2
+  System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w r0, i -1, i r2, i r1, i 0, i 0) i .r1'
+  IntOp $1 $1 - 1   ; 끝의 0 제외
+  StrCpy $6 ""
+  StrCpy $3 0
+  ${While} $3 < $1
+    IntOp $4 $2 + $3
+    System::Call '*$4(&i1 .r5)'
+    IntOp $5 $5 & 0xFF
+    ${If} $5 = 92                     ; \ → /
+      StrCpy $6 "$6/"
+    ${ElseIf} $5 >= 48
+    ${AndIf} $5 <= 58                 ; 0-9 :
+      IntFmt $4 "%c" $5
+      StrCpy $6 "$6$4"
+    ${ElseIf} $5 >= 65
+    ${AndIf} $5 <= 90                 ; A-Z
+      IntFmt $4 "%c" $5
+      StrCpy $6 "$6$4"
+    ${ElseIf} $5 >= 97
+    ${AndIf} $5 <= 122                ; a-z
+      IntFmt $4 "%c" $5
+      StrCpy $6 "$6$4"
+    ${ElseIf} $5 = 45                 ; -
+    ${OrIf} $5 = 46                   ; .
+    ${OrIf} $5 = 95                   ; _
+    ${OrIf} $5 = 126                  ; ~
+    ${OrIf} $5 = 47                   ; /
+      IntFmt $4 "%c" $5
+      StrCpy $6 "$6$4"
+    ${Else}
+      IntFmt $4 "%%%02X" $5
+      StrCpy $6 "$6$4"
+    ${EndIf}
+    IntOp $3 $3 + 1
+  ${EndWhile}
+  System::Free $2
+  StrCpy $0 $6
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Exch $0
+FunctionEnd
+
 Function FindBrowser
   StrCpy $Browser ""
   SetRegView 64
@@ -103,8 +162,11 @@ Function FindBrowser
   !insertmacro TryFile "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
   SetRegView lastused
 
-  ${WordReplace} "$INSTDIR\overtime.html" "\" "/" "+" $3
-  StrCpy $AppArgs '--app="file:///$3" --window-size=1180,880'
+  ; 사용자 폴더 이름이 한글이면 Edge가 --app 주소를 무시하므로, 주소를 %XX 로 바꿔 영문자만 남깁니다.
+  Push "$INSTDIR\overtime.html"
+  Call UrlEncodePath
+  Pop $3
+  StrCpy $AppArgs '--app=file:///$3 --window-size=1180,880'
 FunctionEnd
 
 ; 바로 가기 하나 만들기: 브라우저가 있으면 앱 창, 없으면 기본 브라우저로 html 열기
