@@ -185,6 +185,21 @@
   .hero-art figcaption span { white-space: nowrap; }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { .hero-art { animation: none; } }
+  /* 설정 저장 바 */
+  .savebar { position: sticky; bottom: 0; z-index: 4; display: flex; align-items: center; gap: 8px; margin-top: 8px;
+             padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
+  .savebar span { flex: 1; font-size: 13px; color: var(--muted); }
+  .savebar.dirty span { color: var(--accent); font-weight: 600; }
+  /* 누적 */
+  .cum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .cum span { font-size: 13px; color: var(--muted); }
+  .cum strong { font-size: 18px; color: var(--accent); letter-spacing: -0.3px; }
+  .cum small { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+  /* 수정 창: 초과근무 여러 번 */
+  .ed-sess { margin: 4px 0 10px; }
+  .ed-sess-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; margin-bottom: 6px; }
+  .sess-row { flex-wrap: nowrap; gap: 4px; margin-bottom: 6px; }
+  .sess-row input { flex: 1; min-width: 0; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -292,6 +307,7 @@
       </div>
       <progress id="mProgress" max="100" value="0"></progress>
       <p class="hint" id="mLimit"></p>
+      <div class="cum"><span id="yLabel"></span><strong id="yRec"></strong><small id="yMeta"></small></div>
     </div>
 
     <div class="card">
@@ -378,6 +394,11 @@
       </div>
       <p class="hint">기록은 이 기기(이 브라우저)에만 저장됩니다. 브라우저의 쿠키·사이트 데이터를 지우면 함께 지워질 수 있으니 한 달에 한 번쯤 백업하세요.</p>
     </div>
+    <div class="savebar" id="saveBar">
+      <span id="saveState">변경 사항 없음</span>
+      <button type="button" id="settingsReset" class="ghost">되돌리기</button>
+      <button type="button" id="settingsSave" class="primary">설정 저장</button>
+    </div>
   </section>
 
 </div>
@@ -391,9 +412,11 @@
     <label>조기출근 상신 <span class="row"><input type="time" id="edEarlyReqStart"> ~ <input type="time" id="edEarlyReqEnd"></span></label>
     <label>조기출근 출근 <span class="row"><input type="time" id="edEarly"> ~ <input type="time" id="edEarlyEnd"></span></label>
     <label>초과근무 상신 <span class="row"><input type="time" id="edReqStart"> ~ <input type="time" id="edReqEnd"></span></label>
-    <label>초과근무 시작 <input type="time" id="edStart"></label>
-    <label>초과근무 종료 <input type="time" id="edEnd"></label>
-    <p class="hint">종료 시각이 시작보다 이르면 다음 날 새벽으로 계산합니다(상신시간도 같음). 초과근무 시작·종료를 모두 비우면 조기출근만 기록됩니다.</p>
+    <div class="ed-sess">
+      <div class="ed-sess-head"><span>초과근무 시간</span><button type="button" class="small" id="edAddSess">+ 추가</button></div>
+      <div id="edSessions"></div>
+    </div>
+    <p class="hint">종료 시각이 시작보다 이르면 다음 날 새벽으로 계산합니다(상신시간도 같음). 초과근무 칸을 모두 비우면 조기출근만 기록됩니다. 같은 날 여러 번 근무했다면 [+ 추가]로 늘리세요.</p>
     <div class="dlg-actions">
       <button type="button" id="edDelete" class="ghost" style="color:var(--danger)">삭제</button>
       <span class="sp"></span>
@@ -474,12 +497,14 @@ function load() {
       // 이전 버전 설정(매 시간 ○분부터) → 첫 알림 ○분, 간격 60분으로 옮김
       if (saved.settings && saved.settings.alarmFrom != null && saved.settings.alarmFirst == null) settings.alarmFirst = saved.settings.alarmFrom;
       delete settings.alarmFrom;
-      return { days: saved.days || {}, settings };
+      const days = saved.days || {};
+      for (const k in days) migrateDay(days[k], settings);
+      return { days, settings };
     }
     // 이전 버전(시작/종료만 있던 기록)이 있으면 옮겨 옵니다.
     const old = JSON.parse(localStorage.getItem("overtimeRecords")) || [];
     const days = {};
-    for (const r of old) if (r.end) days[dateKey(r.start)] = { reqStart: "", reqEnd: "", early: "", start: r.start, end: r.end, ackHour: 0 };
+    for (const r of old) if (r.end) days[dateKey(r.start)] = { reqStart: "", reqEnd: "", early: "", sessions: [{ start: r.start, end: r.end, ackHour: 0 }] };
     return { days, settings: { ...DEFAULT_SETTINGS } };
   } catch (e) {
     return { days: {}, settings: { ...DEFAULT_SETTINGS } };
@@ -490,8 +515,18 @@ function save() {
   catch (e) { notice("저장하지 못했습니다. 브라우저 설정(사이트 데이터 허용)을 확인하세요."); }
 }
 function ensureDay(key) {
-  return (state.days[key] ||= { reqStart: "", reqEnd: "", early: "", start: null, end: null, ackHour: 0 });
+  return (state.days[key] ||= { earlyReqStart: "", earlyReqEnd: "", early: "", earlyEnd: "", reqStart: "", reqEnd: "", sessions: [] });
 }
+// 예전 형식(하루 한 번: start/end) → 새 형식(여러 번: sessions 목록)
+function migrateDay(d, settings) {
+  if (!Array.isArray(d.sessions)) d.sessions = d.start ? [{ start: d.start, end: d.end ?? null, ackHour: d.ackHour || 0 }] : [];
+  delete d.start; delete d.end; delete d.ackHour;
+  if (d.earlyEnd && d.earlyEnd === settings.regularStart) d.earlyEnd = ""; // 비어 있으면 = 정규 출근 시각을 따름
+}
+// 초과근무 목록 도우미
+const sess = (d) => (d && d.sessions) || [];
+const runningSess = (d) => sess(d).find((x) => !x.end) || null;
+const fmtSess = (x) => `${hm(x.start)}~${x.end ? hm(x.end) : "진행 중"}`;
 
 // ───────── 3. 작은 도우미 ─────────
 const $ = (id) => document.getElementById(id);
@@ -571,11 +606,15 @@ function calc(key, now = Date.now()) {
   const earlyIn = d.early ? overlap(eA, eB, ew) : 0;
   const earlyReq = ew ? (ew.e - ew.s) / 60000 : null;
   // 저녁 초과근무
-  const end = d.end ?? now;
-  const ot = d.start ? Math.max(0, Math.floor((end - d.start) / 60000)) : 0;
+  // 저녁 초과근무 (같은 날 여러 번이면 모두 더함)
   const w = reqWindow(key);
   const eveReq = w ? (w.e - w.s) / 60000 : null;
-  const otIn = d.start ? overlap(d.start, end, w) : 0;
+  let ot = 0, otIn = 0;
+  for (const x of sess(d)) {
+    const end = x.end ?? now;
+    ot += Math.max(0, Math.floor((end - x.start) / 60000));
+    otIn += overlap(x.start, end, w);
+  }
   // 합계
   const req = earlyReq == null && eveReq == null ? null : (earlyReq || 0) + (eveReq || 0);
   const outside = (early - earlyIn) + (ot - otIn); // 상신시간 밖이라 빠지는 시간
@@ -583,12 +622,12 @@ function calc(key, now = Date.now()) {
   const base = earlyIn + otIn;
   const deduct = type === "평일" ? Math.min(base, s.weekdayDeduct) : 0;
   const recognized = base - deduct;
-  return { type, early, earlyIn, earlyReq, ot, otIn, eveReq, outside, actual, deduct, req, recognized, running: !!d.start && !d.end };
+  return { type, early, earlyIn, earlyReq, ot, otIn, eveReq, outside, actual, deduct, req, recognized, running: !!runningSess(d) };
 }
 
 function runningKey() {
-  const keys = Object.keys(state.days).filter((k) => state.days[k].start && !state.days[k].end);
-  keys.sort((a, b) => state.days[b].start - state.days[a].start); // 가장 최근에 시작한 것
+  const keys = Object.keys(state.days).filter((k) => runningSess(state.days[k]));
+  keys.sort((a, b) => runningSess(state.days[b]).start - runningSess(state.days[a]).start); // 가장 최근에 시작한 것
   return keys[0] || null;
 }
 // "오늘" 화면이 다루는 날짜: 진행 중인 근무가 있으면 그 날(자정을 넘겨도 유지), 없으면 오늘
@@ -596,7 +635,11 @@ function workKey() { return runningKey() || dateKey(Date.now()); }
 
 // ───────── 5. 탭 전환 ─────────
 document.querySelectorAll(".tabs button").forEach((btn) => {
-  btn.onclick = () => {
+  btn.onclick = async () => {
+    if (settingsDirty && btn.dataset.tab !== "settings") {
+      if (await ask("저장하지 않은 설정이 있습니다. 저장할까요?\n[취소]를 누르면 바꾼 내용은 버립니다.")) { if (!saveSettings()) return; }
+      else setDirty(false);
+    }
     document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === btn));
     for (const t of ["today", "records", "settings"]) $("tab-" + t).hidden = t !== btn.dataset.tab;
     setHero(btn.dataset.tab);
@@ -628,8 +671,8 @@ function renderTodayForm() {
   $("earlyReqEndInput").value = d.earlyReqEnd || "";
   $("reqStartInput").value = d.reqStart || "";
   $("reqEndInput").value = d.reqEnd || "";
-  // 시작 시각 칸: 상신 시작 시각이 있으면 그 값, 없으면 지금 시각
-  if (!$("startInput").value) $("startInput").value = d.reqStart || hm(Date.now());
+  // 시작 시각 칸: 오늘 첫 근무면 상신 시작 시각, 이미 근무 기록이 있으면 지금 시각
+  if (!$("startInput").value) $("startInput").value = (!sess(d).length && d.reqStart) || hm(Date.now());
   renderTodayLive();
 }
 
@@ -645,7 +688,7 @@ function renderTodayLive() {
   $("regularLabel").textContent = `정규 출근 ${s.regularStart} 이전`;
   $("earlyInfo").textContent = d.early
     ? `출근 ${d.early}~${d.earlyEnd || s.regularStart} (${fmt(c.early)}) · 상신 ${fmtEarlyReq(key)} 안의 ${fmt(c.earlyIn)}만 인정됩니다.`
-    : "조기출근 상신시간(예: 07:00~09:00)과 실제 출근시간(예: 07:10~09:00)을 입력하세요. 종료를 비우면 정규 출근 시각까지로 계산합니다.";
+    : `조기출근 상신시간(예: ${earlyExample().req})과 실제 출근시간(예: ${earlyExample().act})을 입력하세요. 종료를 비우면 정규 출근 시각(${s.regularStart})까지로 계산합니다.`;
   $("reqInfo").textContent = c.req != null
     ? `상신 ${fmtReq(key)} — 이 시간대 안의 초과근무만 인정됩니다.`
     : "나이스 등에 상신(신청)한 초과근무 시작·종료 시각을 입력하세요. 예) 18:00 ~ 23:00";
@@ -654,14 +697,15 @@ function renderTodayLive() {
   $("otIdle").hidden = c.running;
   $("otRunning").hidden = !c.running;
   if (c.running) {
-    const sec = Math.max(0, Math.floor((now - d.start) / 1000));
+    const r = runningSess(d), nth = sess(d).indexOf(r) + 1;
+    const sec = Math.max(0, Math.floor((now - r.start) / 1000));
     $("timer").textContent = `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec % 3600 / 60))}:${pad(sec % 60)}`;
-    $("runStatus").textContent = `근무 중 · ${hm(d.start)} 시작`;
-    $("nextAlarm").textContent = s.alarmOn ? nextAlarmText(d, now) : "근무 확인 알림이 꺼져 있습니다 (설정 탭).";
+    $("runStatus").textContent = `근무 중 · ${hm(r.start)} 시작${nth > 1 ? ` · 오늘 ${nth}번째` : ""}`;
+    $("nextAlarm").textContent = s.alarmOn ? nextAlarmText(r, now) : "근무 확인 알림이 꺼져 있습니다 (설정 탭).";
   }
 
   // 오늘 기록 요약
-  const otText = d.start ? `${hm(d.start)} ~ ${d.end ? hm(d.end) : "진행 중"} (${fmt(c.ot)})` : "—";
+  const otText = sess(d).length ? `${sess(d).map(fmtSess).join(", ")} (${fmt(c.ot)})` : "—";
   $("todaySum").innerHTML = `
     <dt>조기출근 상신</dt><dd>${fmtEarlyReq(key)}</dd>
     <dt>조기출근</dt><dd>${d.early ? `${d.early}~${d.earlyEnd || s.regularStart} (${fmt(c.early)})` : "—"}</dd>
@@ -675,10 +719,15 @@ function renderTodayLive() {
     <dt><b>인정시간</b></dt><dd class="total">${fmt(c.recognized)}${c.running ? "<small>진행 중</small>" : ""}</dd>`;
   const warns = [];
   if (d.early && c.earlyReq == null) warns.push("조기출근 상신시간이 입력되지 않아 조기출근이 인정시간에 들어가지 않습니다.");
-  if (d.start && c.eveReq == null) warns.push("초과근무 상신시간이 입력되지 않아 초과근무가 인정시간에 들어가지 않습니다.");
+  if (sess(d).length && c.eveReq == null) warns.push("초과근무 상신시간이 입력되지 않아 초과근무가 인정시간에 들어가지 않습니다.");
   $("todayWarn").innerHTML = warns.map((t) => `<div class="warn">${t}</div>`).join("");
 }
 
+// 조기출근 안내 예시: 정규 출근 시각 2시간 전부터 상신, 1시간 50분 전 출근
+function earlyExample() {
+  const R = toMin(state.settings.regularStart), f = (m) => { m = ((m % 1440) + 1440) % 1440; return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; };
+  return { req: `${f(R - 120)}~${state.settings.regularStart}`, act: `${f(R - 110)}~${state.settings.regularStart}` };
+}
 // 조기출근 실제 출근시간 확인 (종료를 비우면 정규 출근 시각까지)
 function checkEarly(v, e) {
   if (e && !v) { notice("조기출근 출근시간의 시작 시각을 입력하세요."); return false; }
@@ -691,7 +740,7 @@ $("earlySave").onclick = () => {
   if (!checkPair(a, b, "조기출근 상신") || !checkEarly(v, e)) return;
   if (!v && !a) return notice("조기출근 상신시간 또는 출근시간을 입력하세요.");
   const d = ensureDay(workKey());
-  d.early = v; d.earlyEnd = v ? (e || state.settings.regularStart) : "";
+  d.early = v; d.earlyEnd = v && e && e !== state.settings.regularStart ? e : ""; // 비우면 정규 출근 시각을 따라감
   d.earlyReqStart = a; d.earlyReqEnd = b;
   save(); renderTodayForm();
 };
@@ -706,7 +755,7 @@ $("reqSave").onclick = () => {
   if (!checkPair(a, b, "초과근무 상신")) return;
   const d = ensureDay(workKey());
   d.reqStart = a; d.reqEnd = b;
-  if (!d.start && a) $("startInput").value = a; // 시작 시각 칸에도 미리 채워 둠
+  if (!sess(d).length && a) $("startInput").value = a; // 시작 시각 칸에도 미리 채워 둠
   save(); renderTodayLive();
 };
 
@@ -715,12 +764,18 @@ $("startBtn").onclick = async () => {
   const t = $("startInput").value;
   if (!t) return notice("초과근무 시작 시각을 입력하세요.");
   const key = dateKey(Date.now());
-  const start = at(key, t);
+  let start = at(key, t);
   if (start > Date.now() + 60000) return notice("현재 시각 이후로는 시작할 수 없습니다. 시작 시각을 확인하세요.");
   const d = ensureDay(key);
+  // 앞 근무가 끝난 그 1분 안에 다시 시작하면 앞 근무 종료 시각부터 이어서 시작
+  const last = sess(d).filter((x) => x.end).sort((p, q) => q.end - p.end)[0];
+  if (last && start < last.end && start >= last.end - 60000) start = last.end;
+  const clash = sess(d).find((x) => (x.end ?? Infinity) > start);
+  if (clash) return notice(`오늘 앞선 근무(${fmtSess(clash)})와 겹칩니다.\n시작 시각을 ${clash.end ? hm(clash.end) : "그 이후"} 이후로 입력하세요.`);
   if (!d.reqStart && !(await ask("상신시간이 아직 입력되지 않았습니다.\n상신시간이 없으면 초과근무가 인정시간에 들어가지 않습니다. 그래도 시작할까요?"))) return;
-  if (d.end && !(await ask("오늘 이미 종료된 초과근무 기록이 있습니다.\n새로 시작하면 기존 시작·종료 시각이 바뀝니다. 계속할까요?"))) return;
-  d.start = start; d.end = null; d.ackHour = 0;
+  // 같은 날 다시 시작하면 앞 기록은 그대로 두고 새 근무를 추가합니다(누적)
+  sess(d).length || (d.sessions = []);
+  d.sessions.push({ start, end: null, ackHour: 0 });
   save(); renderTodayForm();
 };
 $("endBtn").onclick = async () => {
@@ -728,7 +783,7 @@ $("endBtn").onclick = async () => {
   if (!(await ask("초과근무를 종료할까요?"))) return;
   state = load(); // 다른 탭에서 바뀐 내용이 있으면 먼저 반영
   const key = runningKey();
-  if (key) state.days[key].end = Date.now();
+  if (key) runningSess(state.days[key]).end = Date.now();
   save(); closeAlarm(); $("startInput").value = ""; renderTodayForm();
 };
 
@@ -760,7 +815,7 @@ let lastAlertMinute = -1, currentAlarmHour = 0, titleTimer = null;
 function checkAlarm() {
   const key = runningKey();
   if (!key || !state.settings.alarmOn) return;
-  const d = state.days[key];
+  const d = runningSess(state.days[key]); // 지금 진행 중인 근무 기준
   const { n, m } = alarmHourNow(d, Date.now());
   if (!n || n <= (d.ackHour || 0) || m === lastAlertMinute) return;
   lastAlertMinute = m;
@@ -793,7 +848,7 @@ function closeAlarm() {
 $("alarmOk").onclick = () => {
   state = load();
   const key = runningKey();
-  if (key && currentAlarmHour) { state.days[key].ackHour = currentAlarmHour; save(); }
+  if (key && currentAlarmHour) { runningSess(state.days[key]).ackHour = currentAlarmHour; save(); }
   currentAlarmHour = 0; closeAlarm(); renderTodayLive();
 };
 $("alarmDlg").addEventListener("cancel", (e) => e.preventDefault()); // Esc로 닫히지 않게 → [확인]으로만 닫기
@@ -835,7 +890,7 @@ function renderRecords() {
     div.className = "rec";
     const detail = [
       d.early ? `조기출근 ${d.early}~${d.earlyEnd || state.settings.regularStart}(${fmt(c.early)})` : "",
-      d.start ? `초과근무 ${hm(d.start)}~${d.end ? hm(d.end) : "진행 중"}(${fmt(c.ot)})` : "",
+      sess(d).length ? `초과근무 ${sess(d).map(fmtSess).join(", ")}(${sess(d).length > 1 ? `${sess(d).length}회 · ` : ""}${fmt(c.ot)})` : "",
       c.outside > 0 ? `상신시간 밖 ${fmt(c.outside)} 제외` : "",
       c.deduct ? `공제 ${fmt(c.deduct)}` : "",
     ].filter(Boolean).join(" · ");
@@ -863,6 +918,16 @@ function renderRecords() {
   const limit = state.settings.monthlyLimit * 60;
   $("mReq").textContent = fmt(sReq); $("mAct").textContent = fmt(sAct); $("mRec").textContent = fmt(sRec);
   $("mProgress").value = Math.min(100, (sRec / limit) * 100);
+  // 올해 누적
+  let yRec = 0, yAct = 0, yDays = 0, yTimes = 0;
+  for (const k of Object.keys(state.days).filter((k) => k.startsWith(y))) {
+    const c = calc(k); yRec += c.recognized; yAct += c.actual;
+    if (c.actual > 0) yDays++;
+    yTimes += sess(state.days[k]).length + (state.days[k].early ? 1 : 0);
+  }
+  $("yLabel").textContent = `${y}년 누적 인정`;
+  $("yRec").textContent = fmt(yRec);
+  $("yMeta").textContent = `실제 근무 ${fmt(yAct)} · 근무한 날 ${yDays}일 · 조기출근·초과근무 ${yTimes}회`;
   $("mLimit").textContent = `월 기준 ${state.settings.monthlyLimit}시간 중 ${Math.round((sRec / limit) * 100)}% 인정 · 남은 시간 ${fmt(Math.max(0, limit - sRec))}`;
 }
 
@@ -879,11 +944,27 @@ function openEdit(key) {
   $("edReqEnd").value = d.reqEnd || "";
   $("edEarly").value = d.early || "";
   $("edEarlyEnd").value = d.early ? (d.earlyEnd || state.settings.regularStart) : "";
-  $("edStart").value = d.start ? hm(d.start) : "";
-  $("edEnd").value = d.end ? hm(d.end) : "";
+  $("edSessions").innerHTML = "";
+  sess(d).forEach((x) => addSessRow(x));
+  if (!sess(d).length) addSessRow();
   $("edDelete").hidden = !key;
   $("editDlg").showModal();
 }
+// 수정 창의 초과근무 한 줄 (시작 ~ 종료 · 삭제)
+function addSessRow(x) {
+  const row = document.createElement("div");
+  row.className = "row sess-row";
+  row.innerHTML = `<input type="time" class="s" aria-label="시작"><span>~</span><input type="time" class="e" aria-label="종료"><button type="button" class="ghost small">삭제</button>`;
+  if (x) {
+    row.querySelector(".s").value = hm(x.start);
+    row.querySelector(".e").value = x.end ? hm(x.end) : "";
+    if (!x.end) row.dataset.running = "1";
+    row.dataset.ack = x.ackHour || 0;
+  }
+  row.querySelector("button").onclick = () => row.remove();
+  $("edSessions").appendChild(row);
+}
+$("edAddSess").onclick = () => addSessRow();
 $("addRecord").onclick = () => openEdit(null);
 $("edCancel").onclick = () => $("editDlg").close();
 $("edDelete").onclick = async () => {
@@ -893,25 +974,36 @@ $("edDelete").onclick = async () => {
 $("editForm").onsubmit = async (e) => {
   e.preventDefault();
   const key = $("edDate").value;
-  const sT = $("edStart").value, eT = $("edEnd").value, early = $("edEarly").value;
+  const early = $("edEarly").value;
   if (!key) return notice("날짜를 입력하세요.");
   const earlyEnd = $("edEarlyEnd").value;
   if (!checkEarly(early, earlyEnd)) return;
   const rS = $("edReqStart").value, rE = $("edReqEnd").value;
   const erS = $("edEarlyReqStart").value, erE = $("edEarlyReqEnd").value;
   if (!checkPair(erS, erE, "조기출근 상신") || !checkPair(rS, rE, "초과근무 상신")) return;
-  if (!sT && eT) return notice("종료 시각만 있을 수는 없습니다. 시작 시각을 입력하세요.");
-  const wasRunning = editingKey && state.days[editingKey] && state.days[editingKey].start && !state.days[editingKey].end;
-  if (sT && !eT && !wasRunning) return notice("종료 시각을 입력하세요.");
+  // 초과근무 줄 읽기
+  const sessions = [];
+  for (const row of $("edSessions").querySelectorAll(".sess-row")) {
+    const sT = row.querySelector(".s").value, eT = row.querySelector(".e").value;
+    if (!sT && !eT) continue;
+    if (!sT) return notice("초과근무 시작 시각을 입력하세요.");
+    if (!eT && !row.dataset.running) return notice("초과근무 종료 시각을 입력하세요.");
+    const start = at(key, sT);
+    let end = null;
+    if (eT) { end = at(key, eT); if (end <= start) end += 86400000; } // 자정 넘김
+    sessions.push({ start, end, ackHour: Number(row.dataset.ack || 0) });
+  }
+  sessions.sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sessions.length; i++)
+    if ((sessions[i - 1].end ?? Infinity) > sessions[i].start) return notice(`초과근무 ${fmtSess(sessions[i - 1])}와 ${fmtSess(sessions[i])}이(가) 겹칩니다.`);
+  if (sessions.filter((x) => !x.end).length > 1 || sessions.some((x, i) => !x.end && i !== sessions.length - 1))
+    return notice("진행 중인 근무는 하나만, 마지막 줄에만 둘 수 있습니다.");
   if (key !== editingKey && state.days[key] && !(await ask(`${dayLabel(key)}에 이미 기록이 있습니다. 덮어쓸까요?`))) return;
 
-  let start = sT ? at(key, sT) : null, end = null;
-  if (sT && eT) { end = at(key, eT); if (end <= start) end += 86400000; } // 자정 넘김
-  const prev = (editingKey && state.days[editingKey]) || {};
   if (editingKey && editingKey !== key) delete state.days[editingKey];
   state.days[key] = {
-    earlyReqStart: erS, earlyReqEnd: erE, early, earlyEnd: early ? (earlyEnd || state.settings.regularStart) : "",
-    reqStart: rS, reqEnd: rE, start, end, ackHour: prev.ackHour || 0,
+    earlyReqStart: erS, earlyReqEnd: erE, early, earlyEnd: early && earlyEnd && earlyEnd !== state.settings.regularStart ? earlyEnd : "",
+    reqStart: rS, reqEnd: rE, sessions,
   };
   save(); $("editDlg").close();
   viewMonth = key.slice(0, 7); renderRecords(); renderTodayForm();
@@ -920,13 +1012,13 @@ $("editForm").onsubmit = async (e) => {
 // CSV 내려받기 (보고 있는 달)
 $("exportCsv").onclick = () => {
   const rows = [["날짜", "요일", "구분", "조기출근상신시작", "조기출근상신종료", "조기출근시작", "조기출근종료", "조기출근실제(분)",
-    "초과근무상신시작", "초과근무상신종료", "초과근무시작", "초과근무종료", "초과근무실제(분)",
+    "초과근무상신시작", "초과근무상신종료", "초과근무(여러 번은 / 구분)", "초과근무횟수", "초과근무실제(분)",
     "상신합계(분)", "실제합계(분)", "상신밖(분)", "공제(분)", "인정(분)"]];
   for (const key of monthKeys(viewMonth)) {
     const d = state.days[key], c = calc(key);
     rows.push([key, WEEK[new Date(at(key, "00:00")).getDay()], holidayName(key) || c.type,
       d.earlyReqStart || "", d.earlyReqEnd || "", d.early || "", d.early ? (d.earlyEnd || state.settings.regularStart) : "", c.early,
-      d.reqStart || "", d.reqEnd || "", d.start ? hm(d.start) : "", d.end ? hm(d.end) : "", c.ot,
+      d.reqStart || "", d.reqEnd || "", sess(d).map(fmtSess).join(" / "), sess(d).length, c.ot,
       c.req ?? "", c.actual, c.outside, c.deduct, c.recognized]);
   }
   download(`초과근무_${viewMonth}.csv`, "﻿" + rows.map((r) => r.join(",")).join("\n"), "text/csv");
@@ -943,6 +1035,7 @@ for (let i = 0; i <= 59; i++) { $("setFirstM").add(new Option(i, i)); $("setEver
 for (let i = 0; i <= 30; i++) $("setRepeat").add(new Option(i, i));
 function renderSettings() {
   const s = state.settings;
+  if (!settingsDirty) { // 저장 안 한 변경이 있으면 입력칸을 덮어쓰지 않음
   $("setAlarmOn").checked = s.alarmOn;
   $("setFirstH").value = Math.floor(s.alarmFirst / 60); $("setFirstM").value = s.alarmFirst % 60;
   $("setEveryH").value = Math.floor(s.alarmEvery / 60); $("setEveryM").value = s.alarmEvery % 60;
@@ -951,33 +1044,46 @@ function renderSettings() {
   $("setRegular").value = s.regularStart;
   $("setDeduct").value = s.weekdayDeduct / 60; // 저장은 분, 화면은 시간
   $("setLimit").value = s.monthlyLimit;
+  }
   $("notiState").textContent = !("Notification" in window) ? "이 브라우저는 윈도우 알림을 지원하지 않습니다. 화면 알림창과 소리로 알려 드립니다."
     : Notification.permission === "granted" ? "알림: 허용됨 ✔"
     : "알림이 허용되지 않아도 화면 알림창·소리·진동으로 알려 드립니다.";
   renderInstall();
   renderHolidays();
 }
-const bindSetting = (id, field, read) => ($(id).onchange = () => {
-  const v = read($(id));
-  if (v === null) return renderSettings();
-  state.settings[field] = v; save(); renderTodayLive();
-});
-bindSetting("setAlarmOn", "alarmOn", (el) => el.checked);
-// 시간·분 선택 → 분으로 저장
-function bindHM(hId, mId, field, label) {
-  $(hId).onchange = $(mId).onchange = () => {
-    const v = Number($(hId).value) * 60 + Number($(mId).value);
-    if (v < 1) { notice(`${label}은(는) 1분 이상이어야 합니다.`); return renderSettings(); }
-    state.settings[field] = v; save(); renderTodayLive();
-  };
+// ── 설정 저장: 바꾼 값은 [설정 저장]을 눌러야 저장됩니다 ──
+let settingsDirty = false;
+function setDirty(v) {
+  settingsDirty = v;
+  $("saveBar").classList.toggle("dirty", v);
+  $("saveState").textContent = v ? "저장하지 않은 변경 사항이 있습니다" : "변경 사항 없음";
 }
-bindHM("setFirstH", "setFirstM", "alarmFirst", "첫 알림");
-bindHM("setEveryH", "setEveryM", "alarmEvery", "알림 간격");
-bindSetting("setRepeat", "alarmRepeat", (el) => Number(el.value));
-bindSetting("setSound", "sound", (el) => el.checked);
-bindSetting("setRegular", "regularStart", (el) => el.value || null);
-bindSetting("setDeduct", "weekdayDeduct", (el) => (el.value === "" ? null : Math.round(Math.max(0, Number(el.value)) * 60)));
-bindSetting("setLimit", "monthlyLimit", (el) => (Number(el.value) > 0 ? Number(el.value) : null));
+for (const id of ["setAlarmOn", "setFirstH", "setFirstM", "setEveryH", "setEveryM", "setRepeat", "setSound", "setRegular", "setDeduct", "setLimit"]) {
+  $(id).addEventListener("input", () => setDirty(true));
+  $(id).addEventListener("change", () => setDirty(true));
+}
+function saveSettings() {
+  const first = Number($("setFirstH").value) * 60 + Number($("setFirstM").value);
+  const every = Number($("setEveryH").value) * 60 + Number($("setEveryM").value);
+  const regular = $("setRegular").value;
+  const deduct = Number($("setDeduct").value), limit = Number($("setLimit").value);
+  if (first < 1) { notice("첫 알림은 1분 이상이어야 합니다."); return false; }
+  if (every < 1) { notice("알림 간격은 1분 이상이어야 합니다."); return false; }
+  if (!regular) { notice("정규 출근 시각을 입력하세요."); return false; }
+  if ($("setDeduct").value === "" || !(deduct >= 0)) { notice("평일 공제 시간을 0 이상으로 입력하세요."); return false; }
+  if (!(limit > 0)) { notice("월 기준 시간을 입력하세요."); return false; }
+  state = load(); // 다른 탭의 변경을 먼저 반영
+  Object.assign(state.settings, {
+    alarmOn: $("setAlarmOn").checked, alarmFirst: first, alarmEvery: every, alarmRepeat: Number($("setRepeat").value),
+    sound: $("setSound").checked, regularStart: regular, weekdayDeduct: Math.round(deduct * 60), monthlyLimit: limit,
+  });
+  save(); setDirty(false); renderSettings(); renderTodayForm();
+  notice("설정을 저장했습니다.");
+  return true;
+}
+$("settingsSave").onclick = () => saveSettings();
+$("settingsReset").onclick = () => { setDirty(false); renderSettings(); };
+window.addEventListener("beforeunload", (e) => { if (settingsDirty) { e.preventDefault(); e.returnValue = ""; } });
 
 $("testAlarm").onclick = () => { unlockSound(); showAlarm("알림 테스트입니다.<br>실제 근무 기록에는 영향을 주지 않습니다.", 0); };
 $("allowNoti").onclick = async () => {
