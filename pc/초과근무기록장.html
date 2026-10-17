@@ -429,7 +429,7 @@
   </section>
 
 </div>
-<footer class="site"><div><b>오춘기 권오영</b>개인 참고용 기록입니다. 실제 인정시간과 수당은 소속 기관 인사시스템(나이스 등)을 기준으로 합니다.<br>기록은 이 PC의 이 브라우저에만 저장됩니다.</div></footer>
+<footer class="site"><div><b>오춘기 권오영</b>개인 참고용 기록입니다. 실제 인정시간과 수당은 나이스 복무시스템을 기준으로 합니다.<br>기록은 이 PC의 이 브라우저에만 저장됩니다.</div></footer>
 
 <!-- 기록 수정 대화상자 -->
 <dialog id="editDlg">
@@ -1184,7 +1184,7 @@ function buildXlsx(ym) {
   const minToDay = (min) => (min || 0) / 1440; // 엑셀 시간은 하루 = 1
 
   rows.push([str(`${y}년 ${Number(m)}월 초과근무 기록`, X.title)]);
-  rows.push([str(`오춘기 권오영 · 출력일 ${dateKey(Date.now())} · 평일 공제 ${fmt(s.weekdayDeduct)} · 개인 참고용 (실제 인정시간·수당은 소속 기관 인사시스템 기준)`, X.note)]);
+  rows.push([str(`오춘기 권오영 · 출력일 ${dateKey(Date.now())} · 평일 공제 ${fmt(s.weekdayDeduct)} · 개인 참고용 (실제 인정시간·수당은 나이스 복무시스템 기준)`, X.note)]);
   rows.push([]);
   const head = ["날짜", "요일", "구분", "조기출근 상신", "조기출근 근무", "초과근무 상신", "초과근무 근무", "상신 합계", "실제 근무", "상신 밖", "공제", "인정"];
   rows.push(head.map((h) => str(h, X.header)));

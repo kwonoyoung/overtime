@@ -1,6 +1,6 @@
 // sw.js — 서비스 워커: 인터넷이 없어도 앱이 열리게 파일을 폰에 저장(캐시)해 둡니다.
 // 앱을 고쳐서 다시 올릴 때는 아래 VERSION 숫자를 하나 올려 주세요. (예: v2 → v3)
-const VERSION = "v10";
+const VERSION = "v11";
 const CACHE = "overtime-" + VERSION;
 const FILES = [
   "./",
