@@ -1,6 +1,6 @@
 // sw.js — 서비스 워커: 인터넷이 없어도 앱이 열리게 파일을 폰에 저장(캐시)해 둡니다.
 // 앱을 고쳐서 다시 올릴 때는 아래 VERSION 숫자를 하나 올려 주세요. (예: v2 → v3)
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = "overtime-" + VERSION;
 const FILES = [
   "./",
@@ -11,6 +11,7 @@ const FILES = [
   "./icons/maskable-512.png",
   "./icons/apple-touch-icon.png",
   "./icons/favicon-32.png",
+  "./img/hero.webp",
 ];
 
 // 설치될 때: 앱 파일을 미리 저장

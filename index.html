@@ -174,6 +174,17 @@
   header.top { padding-top: env(safe-area-inset-top); height: calc(64px + env(safe-area-inset-top)); }
   footer.site { padding-bottom: calc(36px + env(safe-area-inset-bottom)); }
   .install-steps { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.8; }
+  /* 오늘 화면 일러스트 */
+  .hero-art { margin: 24px 0 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fdfdfd;
+              animation: rise .6s ease-out both; }
+  .hero-art img { display: block; width: 100%; height: auto; }
+  .hero-art figcaption { display: flex; justify-content: space-between; gap: 8px; padding: 12px 16px; font-size: 13px;
+                         color: var(--muted); border-top: 1px solid var(--line); background: #fff; }
+  .hero-art figcaption b { color: var(--ink); font-weight: 600; }
+  .hero-art figcaption { flex-wrap: wrap; row-gap: 2px; }
+  .hero-art figcaption span { white-space: nowrap; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .hero-art { animation: none; } }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -189,6 +200,11 @@
     <p class="eyebrow" id="heroEyebrow">Today</p>
     <h2 id="heroTitle">오늘의 초과근무</h2>
     <p id="heroSub">상신하고, 시작하고, 확인하세요.</p>
+    <figure class="hero-art" id="heroArt">
+      <img src="img/hero.webp" width="1100" height="806" decoding="async"
+           alt="책상 앞에서 하품하며 '요즘따라 시간이 너무 빨리 간다'고 혼잣말하는 사람을 그린 그림. 벽시계와 모니터가 보인다.">
+      <figcaption><span><b>시간이 빨리 갈수록,</b> 기록은 꼼꼼하게.</span><span>그림 · 오춘기 권오영</span></figcaption>
+    </figure>
   </section>
 
   <!-- 1. 첫 화면 메뉴: 오늘 / 기록 / 설정 -->
@@ -599,6 +615,7 @@ const HERO = {
 function setHero(tab) {
   const [e, t, p] = HERO[tab];
   $("heroEyebrow").textContent = e; $("heroTitle").textContent = t; $("heroSub").textContent = p;
+  $("heroArt").hidden = tab !== "today"; // 그림은 오늘 화면에만
 }
 
 // ═════════════ 6. 오늘 탭 ═════════════
