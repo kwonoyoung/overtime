@@ -212,6 +212,13 @@
   .tone.on { background: var(--accent-soft); }
   .tone .play { width: 36px; height: 36px; padding: 0; flex: none; font-size: 13px; }
   .tone .play.playing { background: var(--ink); color: #fff; border-color: var(--ink); }
+  /* 알림 방식 (소리·진동·무음) */
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 10px; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 4px; }
+  .seg label { text-align: center; padding: 8px 0 7px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.5; }
+  .seg label:hover { background: #f6f6f7; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label.on { background: var(--ink); color: #fff; }
+  #soundOpts.off { opacity: .4; pointer-events: none; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -352,7 +359,18 @@
         <span>확인 안 누르면</span>
         <span class="row">1분마다 <select id="setRepeat"></select> 분 동안 다시 알림</span>
       </div>
-      <div class="field"><span>알림 소리</span><input type="checkbox" id="setSound"></div>
+      <div class="field" style="display:block">
+        <span>알림 방식</span>
+        <input type="hidden" id="setSound">
+        <div class="seg" id="modeSeg" role="radiogroup" aria-label="알림 방식">
+          <label data-mode="both"><input type="radio" name="mode" value="both">🔔📳<br>소리+진동</label>
+          <label data-mode="sound"><input type="radio" name="mode" value="sound">🔔<br>소리</label>
+          <label data-mode="vibrate"><input type="radio" name="mode" value="vibrate">📳<br>진동</label>
+          <label data-mode="silent"><input type="radio" name="mode" value="silent">🔕<br>무음</label>
+        </div>
+        <p class="hint" id="modeHint"></p>
+      </div>
+      <div id="soundOpts">
       <div class="field" style="display:block">
         <span>알림음 선택 <small style="color:var(--muted);font-weight:400">· ▶를 누르면 미리 들을 수 있어요</small></span>
         <input type="hidden" id="setSoundType">
@@ -362,6 +380,7 @@
       <div class="field">
         <span>소리 크기</span>
         <span class="row"><input type="range" id="setVolume" min="0.1" max="1" step="0.1" style="width:140px;height:auto;padding:0;border:0;accent-color:var(--ink)"><b id="volLabel" style="width:40px;text-align:right"></b></span>
+      </div>
       </div>
       <p class="hint">
         초과근무 <b>시작 시각</b>을 기준으로 알립니다. 예) 첫 알림 0시간 55분 · 간격 1시간 0분 · 5분 동안 →
@@ -482,7 +501,8 @@ const DEFAULT_SETTINGS = {
   alarmFirst: 55,        // 시작 후 첫 알림까지(분)
   alarmEvery: 60,        // 그다음 알림 간격(분)
   alarmRepeat: 5,        // 확인 안 누르면 1분마다 몇 분 동안 다시 알릴지
-  sound: true,           // 알림 소리
+  sound: true,           // (예전 설정, alertMode 로 대체)
+  alertMode: "both",     // 알림 방식: both(소리+진동) / sound(소리) / vibrate(진동) / silent(무음)
   soundType: "bell",     // 소리 종류: bell(따르릉 알람 벨) / chime(딩동) / beep(삐삐)
   volume: 0.8,           // 소리 크기 0.1 ~ 1
   addedHolidays: {},     // 사용자가 추가한 휴일 { "2026-11-02": "개교기념일" }
@@ -522,6 +542,7 @@ function load() {
       // 이전 버전 설정(매 시간 ○분부터) → 첫 알림 ○분, 간격 60분으로 옮김
       if (saved.settings && saved.settings.alarmFrom != null && saved.settings.alarmFirst == null) settings.alarmFirst = saved.settings.alarmFrom;
       delete settings.alarmFrom;
+      if (saved.settings && saved.settings.alertMode == null) settings.alertMode = saved.settings.sound === false ? "vibrate" : "both";
       const days = saved.days || {};
       for (const k in days) migrateDay(days[k], settings);
       return { days, settings };
@@ -851,15 +872,17 @@ function showAlarm(html, n) {
   currentAlarmHour = n;
   $("alarmMsg").innerHTML = html;
   if (!$("alarmDlg").open) $("alarmDlg").showModal();
-  if (state.settings.sound) beep();
+  const mode = state.settings.alertMode, soundOn = mode === "both" || mode === "sound", vibOn = mode === "both" || mode === "vibrate";
+  if (soundOn) beep();
+  if (vibOn) vibrate();
   try { // 윈도우 알림 (허용된 경우에만)
     const body = $("alarmMsg").textContent;
     if ("Notification" in window && Notification.permission === "granted") {
       // 폰(안드로이드)에서는 서비스 워커를 통해야 알림이 뜹니다
-      if (swReg) swReg.showNotification("초과근무 확인 시간입니다", { body, tag: "overtime-check", renotify: true, requireInteraction: true, icon: "icons/icon-192.png", badge: "icons/favicon-32.png", vibrate: [300, 150, 300] });
-      else new Notification("초과근무 확인 시간입니다", { body, requireInteraction: true });
+      if (swReg) swReg.showNotification("초과근무 확인 시간입니다", { body, tag: "overtime-check", renotify: true, requireInteraction: true, icon: "icons/icon-192.png", badge: "icons/favicon-32.png", silent: !soundOn && !vibOn, ...(vibOn ? { vibrate: VIB } : {}) });
+      else new Notification("초과근무 확인 시간입니다", { body, requireInteraction: true, silent: !soundOn && !vibOn });
     }
-    if (navigator.vibrate) navigator.vibrate([300, 150, 300]); // 폰 진동
+
   } catch (e) {}
   // 다른 창을 보고 있어도 알 수 있게 탭 제목을 깜빡입니다
   clearInterval(titleTimer);
@@ -956,6 +979,10 @@ function playSound(type = state.settings.soundType, volume = state.settings.volu
   } catch (e) {}
 }
 const beep = () => playSound(); // 예전 이름으로 불러도 동작
+// 진동 (안드로이드 폰에서만 동작. 아이폰·PC 브라우저는 진동 기능이 없음)
+const VIB = [500, 200, 500, 200, 500];
+const canVibrate = () => "vibrate" in navigator;
+function vibrate() { try { if (canVibrate()) navigator.vibrate(VIB); } catch (e) {} }
 
 // ═════════════ 8. 기록 탭 ═════════════
 let viewMonth = dateKey(Date.now()).slice(0, 7);
@@ -1278,7 +1305,8 @@ function renderSettings() {
   $("setFirstH").value = Math.floor(s.alarmFirst / 60); $("setFirstM").value = s.alarmFirst % 60;
   $("setEveryH").value = Math.floor(s.alarmEvery / 60); $("setEveryM").value = s.alarmEvery % 60;
   $("setRepeat").value = s.alarmRepeat;
-  $("setSound").checked = s.sound;
+  $("setSound").value = s.alertMode;
+  renderMode();
   $("setSoundType").value = s.soundType;
   renderToneList();
   $("setVolume").value = s.volume; $("volLabel").textContent = Math.round(s.volume * 100) + "%";
@@ -1297,7 +1325,7 @@ let settingsDirty = false;
 function setDirty(v) {
   settingsDirty = v;
   $("saveBar").classList.toggle("dirty", v);
-  $("saveState").textContent = v ? "저장하지 않은 변경 사항이 있습니다" : "변경 사항 없음";
+  $("saveState").textContent = v ? "저장 안 한 변경 있음" : "변경 사항 없음";
 }
 for (const id of ["setAlarmOn", "setFirstH", "setFirstM", "setEveryH", "setEveryM", "setRepeat", "setSound", "setSoundType", "setVolume", "setRegular", "setDeduct", "setLimit"]) {
   $(id).addEventListener("input", () => setDirty(true));
@@ -1316,13 +1344,30 @@ function saveSettings() {
   state = load(); // 다른 탭의 변경을 먼저 반영
   Object.assign(state.settings, {
     alarmOn: $("setAlarmOn").checked, alarmFirst: first, alarmEvery: every, alarmRepeat: Number($("setRepeat").value),
-    sound: $("setSound").checked, soundType: $("setSoundType").value, volume: Number($("setVolume").value), regularStart: regular, weekdayDeduct: Math.round(deduct * 60), monthlyLimit: limit,
+    alertMode: $("setSound").value, sound: $("setSound").value !== "vibrate" && $("setSound").value !== "silent", soundType: $("setSoundType").value, volume: Number($("setVolume").value), regularStart: regular, weekdayDeduct: Math.round(deduct * 60), monthlyLimit: limit,
   });
   save(); setDirty(false); renderSettings(); renderTodayForm();
   notice("설정을 저장했습니다.");
   return true;
 }
 $("settingsSave").onclick = () => saveSettings();
+// 알림 방식 고르기
+const MODE_HINT = {
+  both: "알림창과 함께 알림음이 울리고, 폰은 진동도 합니다.",
+  sound: "알림창과 함께 알림음만 울립니다.",
+  vibrate: "소리 없이 진동만 합니다. 진동은 안드로이드 폰에서만 되며, 아이폰·PC는 화면 알림창만 뜹니다.",
+  silent: "소리·진동 없이 화면 알림창만 조용히 뜹니다. (회의·수업 중에 좋아요)",
+};
+function renderMode() {
+  const m = $("setSound").value || "both";
+  document.querySelectorAll("#modeSeg label").forEach((l) => { const on = l.dataset.mode === m; l.classList.toggle("on", on); l.querySelector("input").checked = on; });
+  $("modeHint").textContent = MODE_HINT[m] + ((m === "both" || m === "vibrate") && !canVibrate() ? " (이 기기는 진동을 지원하지 않습니다)" : "");
+  $("soundOpts").classList.toggle("off", m === "vibrate" || m === "silent");
+}
+document.querySelectorAll("#modeSeg input").forEach((r) => (r.onchange = () => {
+  $("setSound").value = r.value; setDirty(true); renderMode();
+  if (r.value === "vibrate" || r.value === "both") vibrate(); // 골랐을 때 한 번 미리 느껴 보기
+}));
 // 소리 미리 듣기 (저장 전 고른 소리·크기로)
 // 알림음 목록 그리기 (벨소리 고르기 화면)
 function renderToneList() {
