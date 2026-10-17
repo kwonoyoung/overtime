@@ -856,6 +856,7 @@ function showAlarm(html, n) {
 }
 function closeAlarm() {
   if ($("alarmDlg").open) $("alarmDlg").close();
+  if (typeof stopCustom === "function") stopCustom(); // [확인]을 누르면 내 소리 파일도 멈춤
   clearInterval(titleTimer); document.title = "초과근무 기록장";
 }
 $("alarmOk").onclick = () => {
@@ -922,18 +923,46 @@ const TONES = {
 };
 
 // ── 내 소리 파일 (mp3·wav 등) ── 이 기기 브라우저에 함께 저장
-const CUSTOM_KEY = "overtime_custom_sound";
-function customSound() { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY)); } catch (e) { return null; } }
-let customAudio = null;
+// 큰 파일(최대 30MB)도 담을 수 있도록 브라우저의 파일 저장소(IndexedDB)에 보관합니다.
+const CUSTOM_KEY = "overtime_custom_sound";   // 예전(2MB 시절) 저장 위치 → 자동으로 옮김
+const CUSTOM_MAX = 30 * 1024 * 1024;           // 30MB
+const CUSTOM_PLAY_SEC = 30;                     // 긴 음악은 알림 때 앞부분만 재생
+let customMeta = null, customUrl = null, customAudio = null, customStopTimer = null;
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("overtime_files", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("files");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const q = db.transaction("files").objectStore("files").get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+async function idbPut(k, v) { const db = await idb(); return new Promise((res, rej) => { const t = db.transaction("files", "readwrite"); t.objectStore("files").put(v, k); t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error); }); }
+function setCustom(rec) {
+  if (customUrl) URL.revokeObjectURL(customUrl);
+  customMeta = rec && rec.blob ? { name: rec.name, size: rec.blob.size } : null;
+  customUrl = customMeta ? URL.createObjectURL(rec.blob) : null;
+}
+function customSound() { return customMeta; }
+const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + "MB" : Math.max(1, Math.round(b / 1024)) + "KB");
+async function loadCustomSound() {
+  try {
+    const old = localStorage.getItem(CUSTOM_KEY);
+    if (old) { const o = JSON.parse(old); const blob = await (await fetch(o.data)).blob(); await idbPut("customSound", { name: o.name, blob }); localStorage.removeItem(CUSTOM_KEY); }
+    setCustom(await idbGet("customSound"));
+  } catch (e) { setCustom(null); }
+  if (!$("tab-settings").hidden) renderToneList();
+}
+function stopCustom() { clearTimeout(customStopTimer); if (customAudio) customAudio.pause(); }
+loadCustomSound();
 
 function playSound(type = state.settings.soundType, volume = state.settings.volume) {
   try {
     if (type === "custom") {
-      const c = customSound();
-      if (!c) return playSound("bell", volume); // 파일이 없으면 기본 벨
-      customAudio?.pause();
-      customAudio = new Audio(c.data); customAudio.volume = Math.min(1, volume);
+      if (!customUrl) return playSound("bell", volume); // 파일이 없으면 기본 벨
+      stopCustom();
+      customAudio = new Audio(customUrl); customAudio.volume = Math.min(1, volume);
       customAudio.play().catch(() => {});
+      customStopTimer = setTimeout(stopCustom, CUSTOM_PLAY_SEC * 1000); // 긴 음악은 앞부분만
       return;
     }
     unlockSound();
@@ -1337,7 +1366,7 @@ document.querySelectorAll("#modeSeg input").forEach((r) => (r.onchange = () => {
 function renderToneList() {
   const cur = $("setSoundType").value || "bell", c = customSound();
   const items = Object.entries(TONES).map(([id, t]) => [id, t.name, t.desc]);
-  items.push(["custom", "내 소리 파일", c ? c.name : "mp3·wav 등 원하는 소리 파일을 골라 넣기 (2MB 이하)"]);
+  items.push(["custom", "내 소리 파일", c ? `${c.name} · ${fmtSize(c.size)}` : "mp3·wav 등 원하는 소리 파일을 골라 넣기 (30MB 이하)"]);
   $("toneList").innerHTML = items.map(([id, nm, desc]) => `
     <label class="tone${id === cur ? " on" : ""}">
       <input type="radio" name="tone" value="${id}"${id === cur ? " checked" : ""}>
@@ -1363,13 +1392,13 @@ function renderToneList() {
 $("customSoundFile").onchange = async (e) => {
   const f = e.target.files[0]; e.target.value = "";
   if (!f) return;
-  if (f.size > 2 * 1024 * 1024) return notice("2MB 이하의 소리 파일을 골라 주세요.\n(긴 음악은 앞부분만 잘라 쓰시면 좋아요)");
-  const data = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
-  try { localStorage.setItem(CUSTOM_KEY, JSON.stringify({ name: f.name, data })); }
+  if (f.size > CUSTOM_MAX) return notice(`30MB 이하의 소리 파일을 골라 주세요.\n(고른 파일: ${fmtSize(f.size)})`);
+  if (f.type && !f.type.startsWith("audio/")) return notice("mp3·wav·m4a 같은 소리 파일을 골라 주세요.");
+  try { await idbPut("customSound", { name: f.name, blob: f }); setCustom({ name: f.name, blob: f }); }
   catch (err) { return notice("저장 공간이 부족해 소리 파일을 넣지 못했습니다. 더 작은 파일을 골라 주세요."); }
   $("setSoundType").value = "custom"; setDirty(true); renderToneList();
   playSound("custom", Number($("setVolume").value));
-  notice(`"${f.name}"을(를) 알림음으로 골랐습니다.\n[설정 저장]을 누르면 적용됩니다.`);
+  notice(`"${f.name}"(${fmtSize(f.size)})을(를) 알림음으로 골랐습니다.\n[설정 저장]을 누르면 적용됩니다.\n긴 음악은 알림 때 앞부분 ${CUSTOM_PLAY_SEC}초만 울립니다.`);
 };
 $("setVolume").addEventListener("input", () => ($("volLabel").textContent = Math.round($("setVolume").value * 100) + "%"));
 $("settingsReset").onclick = () => { setDirty(false); renderSettings(); };
