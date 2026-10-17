@@ -1,0 +1,9 @@
+{
+  "appId": "io.github.kwonoyoung.overtime",
+  "appName": "초과근무 기록장",
+  "webDir": "www",
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_overtime", "iconColor": "#E8622A" }
+  }
+}
