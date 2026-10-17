@@ -420,12 +420,12 @@
       <h2>다. 공휴일</h2>
       <div class="row" style="margin-bottom:8px">
         <input type="date" id="holDate">
-        <input type="text" id="holName" placeholder="이름 (예: 개교기념일)" class="grow">
+        <input type="text" id="holName" placeholder="휴일 (예: 대체공휴일)" class="grow">
         <button id="holAdd">추가</button>
       </div>
       <div class="row"><span>보기:</span><select id="holYear"></select></div>
       <div class="hol-list" id="holList"></div>
-      <p class="hint">2026~2027년 공휴일·대체공휴일이 미리 들어 있습니다. 정부 발표가 바뀌거나 기관 휴일이 따로 있으면 여기서 추가·제외하세요.</p>
+      <p class="hint">2026~2027년 공휴일·대체공휴일이 미리 들어 있습니다. 정부 발표가 바뀌거나 기관 휴일이 따로 있으면 여기서 추가·삭제하세요.</p>
     </div>
 
     <div class="card">
@@ -524,7 +524,7 @@ const DEFAULT_SETTINGS = {
   removedHolidays: [],   // 기본 목록에서 제외한 날짜
 };
 
-// 2026~2027 공휴일·대체공휴일 (설정 탭에서 추가/제외 가능)
+// 2026~2027 공휴일·대체공휴일 (설정 탭에서 추가/삭제 가능)
 const BUILTIN_HOLIDAYS = {
   "2026-01-01":"신정","2026-02-16":"설날 연휴","2026-02-17":"설날","2026-02-18":"설날 연휴",
   "2026-03-01":"삼일절","2026-03-02":"대체공휴일(삼일절)","2026-05-01":"노동절","2026-05-05":"어린이날",
@@ -1490,7 +1490,7 @@ function renderHolidays() {
     row.className = "hol" + (removed ? " removed" : "");
     row.innerHTML = `<span>${dayLabel(k)} ${custom ? s.addedHolidays[k] + " (추가)" : BUILTIN_HOLIDAYS[k]}</span>`;
     const b = document.createElement("button");
-    b.className = "small"; b.textContent = custom ? "삭제" : removed ? "복원" : "제외";
+    b.className = "small"; b.textContent = custom ? "삭제" : removed ? "복원" : "삭제";
     b.onclick = () => {
       if (custom) delete s.addedHolidays[k];
       else if (removed) s.removedHolidays = s.removedHolidays.filter((x) => x !== k);
