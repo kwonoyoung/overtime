@@ -219,7 +219,37 @@
     <div class="dayline"><b id="todayLabel"></b><span id="todayType" class="badge"></span></div>
 
     <div class="card">
-      <h2>가. 조기출근 입력 <small id="regularLabel"></small></h2>
+      <h2>가. 초과근무 상신시간 입력</h2>
+      <div class="row">
+        <input type="time" id="reqStartInput" class="grow" aria-label="신청 시작">
+        <span>~</span>
+        <input type="time" id="reqEndInput" class="grow" aria-label="신청 종료">
+      </div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button id="reqSave">저장</button>
+      </div>
+      <p class="hint" id="reqInfo"></p>
+    </div>
+
+    <div class="card">
+      <h2>나. 초과근무</h2>
+      <div id="otIdle">
+        <div class="row">
+          <label for="startInput">시작 시각</label>
+          <input type="time" id="startInput" class="grow">
+        </div>
+        <button id="startBtn" class="primary block">초과근무 시작</button>
+      </div>
+      <div id="otRunning" hidden>
+        <p class="status" id="runStatus"></p>
+        <div class="timer" id="timer">00:00:00</div>
+        <p class="hint" id="nextAlarm"></p>
+        <button id="endBtn" class="danger block">초과근무 종료</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>다. 조기출근 입력 <small id="regularLabel"></small></h2>
       <div class="row" style="margin-bottom:8px">
         <span class="lbl">상신시간</span>
         <input type="time" id="earlyReqStartInput" class="grow" aria-label="조기출근 상신 시작">
@@ -237,36 +267,6 @@
         <button id="earlySave">저장</button>
       </div>
       <p class="hint" id="earlyInfo"></p>
-    </div>
-
-    <div class="card">
-      <h2>나. 초과근무 상신시간 입력</h2>
-      <div class="row">
-        <input type="time" id="reqStartInput" class="grow" aria-label="신청 시작">
-        <span>~</span>
-        <input type="time" id="reqEndInput" class="grow" aria-label="신청 종료">
-      </div>
-      <div class="row" style="justify-content:flex-end;margin-top:8px">
-        <button id="reqSave">저장</button>
-      </div>
-      <p class="hint" id="reqInfo"></p>
-    </div>
-
-    <div class="card">
-      <h2>다. 초과근무</h2>
-      <div id="otIdle">
-        <div class="row">
-          <label for="startInput">시작 시각</label>
-          <input type="time" id="startInput" class="grow">
-        </div>
-        <button id="startBtn" class="primary block">초과근무 시작</button>
-      </div>
-      <div id="otRunning" hidden>
-        <p class="status" id="runStatus"></p>
-        <div class="timer" id="timer">00:00:00</div>
-        <p class="hint" id="nextAlarm"></p>
-        <button id="endBtn" class="danger block">초과근무 종료</button>
-      </div>
     </div>
 
     <div class="card">
